@@ -1,10 +1,16 @@
-import pickle
-from pathlib import Path
-
-import pandas as pd
 import streamlit as st
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+
+from src.heart_predictor import (
+    PIPELINE_PATH,
+    CHEST_PAIN_OPTIONS,
+    REST_ECG_OPTIONS,
+    SEX_OPTIONS,
+    SLOPE_OPTIONS,
+    THAL_OPTIONS,
+    YES_NO_OPTIONS,
+    build_input_dataframe,
+    load_pipeline,
+)
 
 
 st.set_page_config(
@@ -12,51 +18,6 @@ st.set_page_config(
     page_icon="Heart",
     layout="wide",
 )
-
-
-APP_DIR = Path(__file__).parent
-MODEL_PATH = APP_DIR / "knn_optimal_model.pkl"
-DATA_PATH = APP_DIR / "heart.csv"
-FEATURE_COLUMNS = [
-    "age",
-    "sex",
-    "cp",
-    "trestbps",
-    "chol",
-    "fbs",
-    "restecg",
-    "thalach",
-    "exang",
-    "oldpeak",
-    "slope",
-    "ca",
-    "thal",
-]
-
-SEX_OPTIONS = {"Female": 0, "Male": 1}
-YES_NO_OPTIONS = {"No": 0, "Yes": 1}
-CHEST_PAIN_OPTIONS = {
-    "Typical angina": 0,
-    "Atypical angina": 1,
-    "Non-anginal pain": 2,
-    "No chest pain symptoms": 3,
-}
-REST_ECG_OPTIONS = {
-    "Normal": 0,
-    "ST-T wave abnormality": 1,
-    "Left ventricular hypertrophy": 2,
-}
-SLOPE_OPTIONS = {
-    "Upsloping": 0,
-    "Flat": 1,
-    "Downsloping": 2,
-}
-THAL_OPTIONS = {
-    "Normal": 0,
-    "Fixed defect": 1,
-    "Reversible defect": 2,
-    "Other result": 3,
-}
 
 
 st.markdown(
@@ -277,67 +238,6 @@ st.markdown(
 )
 
 
-@st.cache_data
-def load_dataset(data_path: Path) -> pd.DataFrame:
-    return pd.read_csv(data_path)
-
-
-@st.cache_resource
-def load_model(model_path: Path):
-    with open(model_path, "rb") as file:
-        return pickle.load(file)
-
-
-@st.cache_resource
-def load_artifacts(model_path: Path, data_path: Path):
-    dataset = load_dataset(data_path)
-    X = dataset[FEATURE_COLUMNS]
-    y = dataset["target"]
-    X_train, _, _, _ = train_test_split(X, y, test_size=0.33, random_state=42)
-
-    scaler = StandardScaler()
-    scaler.fit(X_train)
-
-    model = load_model(model_path)
-    return scaler, model
-
-
-def build_input_dataframe(
-    age: int,
-    sex_label: str,
-    chest_pain_label: str,
-    resting_bp: int,
-    cholesterol: int,
-    fasting_sugar_label: str,
-    rest_ecg_label: str,
-    max_heart_rate: int,
-    exercise_angina_label: str,
-    st_depression: float,
-    slope_label: str,
-    major_vessels: int,
-    thal_label: str,
-) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "age": age,
-                "sex": SEX_OPTIONS[sex_label],
-                "cp": CHEST_PAIN_OPTIONS[chest_pain_label],
-                "trestbps": resting_bp,
-                "chol": cholesterol,
-                "fbs": YES_NO_OPTIONS[fasting_sugar_label],
-                "restecg": REST_ECG_OPTIONS[rest_ecg_label],
-                "thalach": max_heart_rate,
-                "exang": YES_NO_OPTIONS[exercise_angina_label],
-                "oldpeak": st_depression,
-                "slope": SLOPE_OPTIONS[slope_label],
-                "ca": major_vessels,
-                "thal": THAL_OPTIONS[thal_label],
-            }
-        ]
-    )[FEATURE_COLUMNS]
-
-
 def field_label(title: str, help_text: str) -> None:
     st.markdown(
         f"""
@@ -353,19 +253,25 @@ def field_label_end() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-if not MODEL_PATH.exists():
-    st.error(f"Missing model file: `{MODEL_PATH}`")
-    st.stop()
+@st.cache_resource
+def get_artifact():
+    return load_pipeline(PIPELINE_PATH)
 
-if not DATA_PATH.exists():
-    st.error(f"Missing dataset file: `{DATA_PATH}`")
+
+if not PIPELINE_PATH.exists():
+    st.error(
+        "Serving pipeline not found. Run `python train.py` first to create `heart_disease_pipeline.joblib`."
+    )
     st.stop()
 
 try:
-    scaler, model = load_artifacts(MODEL_PATH, DATA_PATH)
+    artifact = get_artifact()
 except Exception as exc:
-    st.error(f"Could not load the app assets: {exc}")
+    st.error(f"Could not load the saved prediction pipeline: {exc}")
     st.stop()
+
+
+pipeline = artifact["pipeline"]
 
 
 st.markdown(
@@ -544,9 +450,8 @@ input_df = build_input_dataframe(
 )
 
 if submitted:
-    scaled_input = scaler.transform(input_df)
-    prediction = int(model.predict(scaled_input)[0])
-    probabilities = model.predict_proba(scaled_input)[0]
+    prediction = int(pipeline.predict(input_df)[0])
+    probabilities = pipeline.predict_proba(input_df)[0]
     confidence = float(probabilities[prediction])
 
     if prediction == 1:
